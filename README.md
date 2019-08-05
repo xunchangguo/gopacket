@@ -1,3 +1,7 @@
+# Add Example tcpdump -> cap file -> read cap file -> send to server
+gopacket/examples/AgentSimulator/
+
+
 # GoPacket
 
 This library provides packet decoding capabilities for Go.
