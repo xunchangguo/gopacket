@@ -15,6 +15,39 @@ import (
 	"github.com/google/gopacket"
 )
 
+func FuzzDecodeFromBytes(f *testing.F) {
+	f.Fuzz(func(t *testing.T, bytes []byte) {
+		dns := DNS{}
+		dns.DecodeFromBytes(bytes, gopacket.NilDecodeFeedback)
+	})
+}
+
+// it have a layer like that:
+//    name: xxx.com
+//    type: CNAME
+//    class: 254 (QCLASS None)   # [RFC 2136]
+//    ttl: 0
+//    data-length: 0
+//    data: nil
+var testPacketDNSNilRdata = []byte{
+	0x96, 0x99, 0x28, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x03, 0x00, 0x00, 0x02, 0x6a, 0x79, 0x09,
+	0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x03, 0x63, 0x6f, 0x6d, 0x00, 0x00, 0x06,
+	0x00, 0x01, 0x0c, 0x50, 0x46, 0x32, 0x45, 0x41, 0x5a, 0x43, 0x4c, 0x2d, 0x42, 0x49, 0x5a, 0x02,
+	0x6a, 0x79, 0x09, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x03, 0x63, 0x6f, 0x6d,
+	0x00, 0x00, 0x05, 0x00, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0, 0x22, 0x00, 0x1c, 0x00,
+	0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0, 0x22, 0x00, 0x01, 0x00, 0xff, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0xc0, 0x22, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x04, 0xb0, 0x00, 0x04, 0x0a,
+	0x54, 0x4e, 0xf1,
+}
+
+func TestPacketDNSNilRdata(t *testing.T) {
+	p := gopacket.NewPacket(testPacketDNSNilRdata, LayerTypeDNS, testDecodeOptions)
+	if p.ErrorLayer() != nil {
+		t.Error("Failed to decode packet:", p.ErrorLayer().Error())
+	}
+	checkLayers(p, []gopacket.LayerType{LayerTypeDNS}, t)
+}
+
 // testPacketDNSRegression is the packet:
 //   11:08:05.708342 IP 109.194.160.4.57766 > 95.211.92.14.53: 63000% [1au] A? picslife.ru. (40)
 //      0x0000:  0022 19b6 7e22 000f 35bb 0b40 0800 4500  ."..~"..5..@..E.
@@ -75,6 +108,125 @@ func TestParseDNSTypeTXT(t *testing.T) {
 	txt := string(answers[0].TXTs[0])
 	if txt != testParseDNSTypeTXTValue {
 		t.Errorf("Incorrect TXT value, expected %q, got %q", testParseDNSTypeTXTValue, txt)
+	}
+}
+
+var testParseDNSBadVers = []byte{
+	0x02, 0x00, 0x00, 0x00, // PF_INET
+	0x45, 0x00, 0x00, 0x38, 0xa5, 0xa0, 0x40, 0x00, 0x38, 0x11, 0x00, 0xbd, 0xc0, 0x05, 0x05, 0xf1,
+	0xac, 0x1e, 0x2a, 0x43, 0x00, 0x35, 0xfd, 0x78, 0x00, 0x24, 0x40, 0xc1, 0x8f, 0xb3, 0x81, 0x00,
+	0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x10, 0x00, 0x01, 0x00, 0x00, 0x29,
+	0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+}
+var testParseDNSBadVersResponseCode = DNSResponseCodeBadVers
+
+func TestParseDNSBadVers(t *testing.T) {
+	p := gopacket.NewPacket(testParseDNSBadVers, LinkTypeNull, testDecodeOptions)
+	if p.ErrorLayer() != nil {
+		t.Error("Failed to decode packet:", p.ErrorLayer().Error())
+	}
+	checkLayers(p, []gopacket.LayerType{LayerTypeLoopback, LayerTypeIPv4, LayerTypeUDP, LayerTypeDNS}, t)
+	questions := p.Layer(LayerTypeDNS).(*DNS).Questions
+	if len(questions) != 1 {
+		t.Error("Failed to parse 1 DNS question")
+	}
+	answers := p.Layer(LayerTypeDNS).(*DNS).Answers
+	if len(answers) != 0 {
+		t.Error("Failed to parse 0 DNS answer")
+	}
+	additionals := p.Layer(LayerTypeDNS).(*DNS).Additionals
+	if len(additionals) != 1 {
+		t.Error("Failed to parse 1 DNS additional")
+	}
+
+	optAll := additionals[0].OPT
+	if len(optAll) != 0 {
+		t.Errorf("Parsed %d OPTs, expected 0", len(optAll))
+	}
+	responseCode := p.Layer(LayerTypeDNS).(*DNS).ResponseCode
+	if responseCode != testParseDNSBadVersResponseCode {
+		t.Errorf("Incorrect extended response code, expected %q, got %q", testParseDNSBadVersResponseCode, responseCode)
+	}
+}
+
+var testParseDNSBadCookie = []byte{
+	0x02, 0x00, 0x00, 0x00, // PF_INET
+	0x45, 0x00, 0x00, 0x54, 0xfe, 0xaa, 0x00, 0x00, 0x40, 0x11, 0x00, 0x00, 0x7f, 0x00, 0x00, 0x01,
+	0x7f, 0x00, 0x00, 0x01, 0x00, 0x35, 0xd6, 0xaa, 0x00, 0x40, 0xfe, 0x53, 0xf6, 0xab, 0x81, 0x87,
+	0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x06, 0x00, 0x01, 0x00, 0x00, 0x29,
+	0x10, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x1c, 0x00, 0x0a, 0x00, 0x18, 0x36, 0xbf, 0x11, 0x1f,
+	0xef, 0x2e, 0x01, 0x09, 0x7d, 0x8f, 0xfe, 0x06, 0x5c, 0x63, 0x6f, 0xfb, 0x14, 0x2d, 0x76, 0x74,
+	0x94, 0x40, 0x7a, 0x73,
+}
+var testParseDNSBadCookieResponseCode = DNSResponseCodeBadCookie
+
+func TestParseDNSBadCookie(t *testing.T) {
+	p := gopacket.NewPacket(testParseDNSBadCookie, LinkTypeNull, testDecodeOptions)
+	if p.ErrorLayer() != nil {
+		t.Error("Failed to decode packet:", p.ErrorLayer().Error())
+	}
+	checkLayers(p, []gopacket.LayerType{LayerTypeLoopback, LayerTypeIPv4, LayerTypeUDP, LayerTypeDNS}, t)
+	questions := p.Layer(LayerTypeDNS).(*DNS).Questions
+	if len(questions) != 1 {
+		t.Error("Failed to parse 1 DNS question")
+	}
+	answers := p.Layer(LayerTypeDNS).(*DNS).Answers
+	if len(answers) != 0 {
+		t.Error("Failed to parse 0 DNS answer")
+	}
+	additionals := p.Layer(LayerTypeDNS).(*DNS).Additionals
+	if len(additionals) != 1 {
+		t.Error("Failed to parse 1 DNS additional")
+	}
+
+	optAll := additionals[0].OPT
+	if len(optAll) != 1 {
+		t.Errorf("Parsed %d OPTs, expected 1", len(optAll))
+	}
+	responseCode := p.Layer(LayerTypeDNS).(*DNS).ResponseCode
+	if responseCode != testParseDNSBadCookieResponseCode {
+		t.Errorf("Incorrect extended response code, expected %q, got %q", testParseDNSBadCookieResponseCode, responseCode)
+	}
+}
+
+var testParseDNSTypeURI = []byte{
+	0x02, 0x00, 0x00, 0x00, // PF_INET
+	0x45, 0x00, 0x00, 0x6f, 0x3e, 0x65, 0x00, 0x00, 0x40, 0x11, 0x3e, 0x17, 0x7f, 0x00, 0x00, 0x01,
+	0x7f, 0x00, 0x00, 0x01, 0x00, 0x35, 0xe7, 0xd3, 0x00, 0x5b, 0xfe, 0x6e, 0xaf, 0x2d, 0x85, 0x80,
+	0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x5f, 0x68, 0x74, 0x74, 0x70, 0x03, 0x64,
+	0x6e, 0x73, 0x04, 0x74, 0x65, 0x73, 0x74, 0x00, 0x01, 0x00, 0x00, 0x01, 0xc0, 0x0c, 0x01, 0x00,
+	0x00, 0x01, 0x00, 0x00, 0x2a, 0x30, 0x00, 0x1c, 0x00, 0x0a, 0x00, 0x05, 0x68, 0x74, 0x74, 0x70,
+	0x3a, 0x2f, 0x2f, 0x77, 0x77, 0x77, 0x2e, 0x64, 0x6e, 0x73, 0x2e, 0x74, 0x65, 0x73, 0x74, 0x3a,
+	0x38, 0x30, 0x30, 0x30, 0x00, 0x00, 0x29, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+}
+var testParseDNSTypeURITarget = "http://www.dns.test:8000"
+var testParseDNSTypeURIPriority = uint16(10)
+var testParseDNSTypeURIWeight = uint16(5)
+
+func TestParseDNSTypeURI(t *testing.T) {
+	p := gopacket.NewPacket(testParseDNSTypeURI, LinkTypeNull, testDecodeOptions)
+	if p.ErrorLayer() != nil {
+		t.Error("Failed to decode packet:", p.ErrorLayer().Error())
+	}
+	checkLayers(p, []gopacket.LayerType{LayerTypeLoopback, LayerTypeIPv4, LayerTypeUDP, LayerTypeDNS}, t)
+	answers := p.Layer(LayerTypeDNS).(*DNS).Answers
+	if len(answers) != 1 {
+		t.Error("Failed to parse 1 DNS answer")
+	}
+	if len(answers[0].URI.Target) < 1 {
+		t.Error("Failed to parse 1 URI record")
+	}
+	target := string(answers[0].URI.Target)
+	if target != testParseDNSTypeURITarget {
+		t.Errorf("Incorrect URI target value, expected %q, got %q", testParseDNSTypeURITarget, target)
+	}
+	priority := answers[0].URI.Priority
+	if priority != testParseDNSTypeURIPriority {
+		t.Errorf("Incorrect URI priority value, expected %q, got %q", testParseDNSTypeURIPriority, priority)
+	}
+	weight := answers[0].URI.Weight
+	if weight != testParseDNSTypeURIWeight {
+		t.Errorf("Incorrect URI weight value, expected %q, got %q", testParseDNSTypeURIWeight, weight)
 	}
 }
 
@@ -214,6 +366,16 @@ func testResourceEqual(t *testing.T, i int, name string, exp, got DNSResourceRec
 	}
 	if exp.MX.Preference != got.MX.Preference {
 		t.Errorf("expected %s[%d].MX.Preference = %v, got %v", name, i, exp.MX.Preference, got.MX.Preference)
+	}
+	// URI
+	if !bytes.Equal(exp.URI.Target, got.URI.Target) {
+		t.Errorf("expected %s[%d].URI.Target = %v, got %v", name, i, exp.URI.Target, got.URI.Target)
+	}
+	if exp.URI.Weight != got.URI.Weight {
+		t.Errorf("expected %s[%d].URI.Weight = %v, got %v", name, i, exp.URI.Weight, got.URI.Weight)
+	}
+	if exp.URI.Priority != got.URI.Priority {
+		t.Errorf("expected %s[%d].URI.Priority = %v, got %v", name, i, exp.URI.Priority, got.URI.Priority)
 	}
 
 	// OPT
@@ -403,6 +565,19 @@ func TestDNSEncodeResponse(t *testing.T) {
 			Class: DNSClassIN,
 			TTL:   1024,
 			IP:    net.IP([]byte{1, 2, 3, 4}),
+		})
+
+	dns.Answers = append(dns.Answers,
+		DNSResourceRecord{
+			Name:  []byte("example1.com"),
+			Type:  DNSTypeURI,
+			Class: DNSClassIN,
+			TTL:   1024,
+			URI: DNSURI{
+				Target:   []byte("http://www.example2.com/"),
+				Priority: 10240,
+				Weight:   1,
+			},
 		})
 
 	dns.Answers = append(dns.Answers,

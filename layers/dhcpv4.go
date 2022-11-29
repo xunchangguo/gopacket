@@ -124,6 +124,10 @@ func (d *DHCPv4) LayerType() gopacket.LayerType { return LayerTypeDHCPv4 }
 
 // DecodeFromBytes decodes the given bytes into this layer.
 func (d *DHCPv4) DecodeFromBytes(data []byte, df gopacket.DecodeFeedback) error {
+	if len(data) < 240 {
+		df.SetTruncated()
+		return fmt.Errorf("DHCPv4 length %d too short", len(data))
+	}
 	d.Options = d.Options[:0]
 	d.Operation = DHCPOp(data[0])
 	d.HardwareType = LinkType(data[1])
@@ -168,6 +172,9 @@ func (d *DHCPv4) DecodeFromBytes(data []byte, df gopacket.DecodeFeedback) error 
 			start += int(o.Length) + 2
 		}
 	}
+
+	d.Contents = data
+
 	return nil
 }
 
@@ -326,6 +333,7 @@ const (
 	DHCPOptDomainSearch          DHCPOpt = 119 // n, string
 	DHCPOptSIPServers            DHCPOpt = 120 // n, url
 	DHCPOptClasslessStaticRoute  DHCPOpt = 121 //
+	DHCPOptMUDURLV4              DHCPOpt = 161 // n, string
 	DHCPOptEnd                   DHCPOpt = 255
 )
 
@@ -464,6 +472,8 @@ func (o DHCPOpt) String() string {
 		return "DomainSearch"
 	case DHCPOptClasslessStaticRoute:
 		return "ClasslessStaticRoute"
+	case DHCPOptMUDURLV4:
+		return "ManufacturerUsageDescriptionURL"
 	default:
 		return "Unknown"
 	}
